@@ -31,4 +31,10 @@ On openSUSE, install Tauri's system dependencies and build the RPM package:
 npm run tauri:build:opensuse
 ```
 
+On openSUSE Tumbleweed, the GTK development packages are `gtk3-devel` and `webkitgtk3-devel`:
+
+```bash
+sudo zypper install gtk3-devel webkitgtk3-devel
+```
+
 The Linux release baselines are Ubuntu 24.04 LTS (amd64) and openSUSE Leap 16.0 (x86_64). The Debian package and AppImage are built on Ubuntu; the RPM is built on openSUSE Leap. Build Linux packages on the target distribution; Tauri recommends using the oldest supported base system to keep glibc requirements compatible. The RPM needs WebKitGTK 4.1 (`libwebkit2gtk-4_1-0`).

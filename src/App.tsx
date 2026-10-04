@@ -27,6 +27,12 @@ type FileAction =
   | { type: "close" };
 
 const drawingFilter = [{ name: "Excalidraw drawing", extensions: ["excalidraw"] }];
+const defaultAppState = {
+  gridSize: 20,
+  gridStep: 5,
+  gridModeEnabled: false,
+  viewBackgroundColor: "#ffffff",
+};
 
 function fileName(path: string) {
   return path.split(/[\\/]/).pop() || path;
@@ -35,7 +41,7 @@ function fileName(path: string) {
 function sceneJson(scene: ExcalidrawInitialDataState) {
   return serializeAsJSON(
     scene.elements ?? [],
-    scene.appState ?? {},
+    { ...defaultAppState, ...scene.appState },
     scene.files ?? {},
     "local",
   );
@@ -45,7 +51,7 @@ async function parseDrawing(contents: string) {
   return loadFromBlob(new Blob([contents], { type: "application/json" }), null, null);
 }
 
-const blankScene: ExcalidrawInitialDataState = { elements: [] };
+const blankScene: ExcalidrawInitialDataState = { elements: [], appState: defaultAppState };
 const blankDrawing = sceneJson(blankScene);
 
 export default function App() {
@@ -76,6 +82,19 @@ export default function App() {
     window.setTimeout(() => setNotice(""), 5000);
   }, []);
 
+  const scheduleRecovery = useCallback((drawing: string, sourcePath = currentPathRef.current) => {
+    if (recoveryTimer.current) window.clearTimeout(recoveryTimer.current);
+    recoveryTimer.current = window.setTimeout(() => {
+      invoke("write_recovery", {
+        snapshot: {
+          updated_at: Date.now(),
+          source_path: sourcePath,
+          drawing,
+        } satisfies RecoverySnapshot,
+      }).catch(showError);
+    }, 700);
+  }, [showError]);
+
   const remember = useCallback(async (path: string) => {
     const files = await invoke<string[]>("remember_file", { path });
     setRecentFiles(files);
@@ -99,9 +118,10 @@ export default function App() {
         setNotice("");
       }
       await invoke("clear_recovery");
+      if (dirtyRef.current) scheduleRecovery(currentJson.current, path);
       if (path) await remember(path);
     },
-    [remember, setPath],
+    [remember, scheduleRecovery, setPath],
   );
 
   const readScene = useCallback(async (path: string) => {
@@ -163,11 +183,15 @@ export default function App() {
         const contents = currentJson.current || savedJson.current;
         await invoke("write_drawing", { path, contents });
         savedJson.current = contents;
-        dirtyRef.current = false;
-        setDirty(false);
         setPath(path);
-        setNotice("Saved");
-        await invoke("clear_recovery");
+        dirtyRef.current = currentJson.current !== contents;
+        setDirty(dirtyRef.current);
+        setNotice(dirtyRef.current ? "Saved. Newer changes remain unsaved." : "Saved");
+        if (dirtyRef.current) {
+          scheduleRecovery(currentJson.current, path);
+        } else {
+          await invoke("clear_recovery");
+        }
         await remember(path);
         return true;
       } catch (error) {
@@ -175,7 +199,7 @@ export default function App() {
         return false;
       }
     },
-    [remember, setPath, showError],
+    [remember, scheduleRecovery, setPath, showError],
   );
 
   const performAction = useCallback(
@@ -236,22 +260,14 @@ export default function App() {
       dirtyRef.current = contents !== savedJson.current;
       setDirty(dirtyRef.current);
       setNotice("");
-      if (recoveryTimer.current) window.clearTimeout(recoveryTimer.current);
       if (dirtyRef.current) {
-        recoveryTimer.current = window.setTimeout(() => {
-          invoke("write_recovery", {
-            snapshot: {
-              updated_at: Date.now(),
-              source_path: currentPathRef.current,
-              drawing: contents,
-            } satisfies RecoverySnapshot,
-          }).catch(showError);
-        }, 700);
+        scheduleRecovery(contents);
       } else {
+        if (recoveryTimer.current) window.clearTimeout(recoveryTimer.current);
         invoke("clear_recovery").catch(showError);
       }
     },
-    [ready, showError],
+    [ready, scheduleRecovery],
   );
 
   const resolvePending = useCallback(
@@ -264,7 +280,7 @@ export default function App() {
       }
       if (decision === "save") {
         const saved = await saveDocument();
-        if (!saved) return;
+        if (!saved || dirtyRef.current) return;
       } else {
         try {
           await invoke("clear_recovery");

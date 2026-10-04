@@ -12,13 +12,24 @@ const state = vi.hoisted(() => ({
   recent: [] as string[],
   recovery: null as { updated_at: number; source_path: string | null; drawing: string } | null,
   modifiedAt: null as number | null,
+  writeGate: null as Promise<void> | null,
 }));
 
 vi.mock("@excalidraw/excalidraw", async () => {
   const React = await import("react");
   return {
-    Excalidraw: ({ initialData, onChange }: { initialData: { elements?: { id: string }[] }; onChange: (elements: { id: string }[], appState: object, files: object) => void }) => {
+    Excalidraw: ({ initialData, onChange }: { initialData: { elements?: { id: string }[]; appState?: object; files?: object }; onChange: (elements: { id: string }[], appState: object, files: object) => void }) => {
       const [elements, setElements] = React.useState(initialData.elements ?? []);
+      React.useEffect(() => {
+        const timer = window.setTimeout(() => onChange(elements, {
+          gridSize: 20,
+          gridStep: 5,
+          gridModeEnabled: false,
+          viewBackgroundColor: "#ffffff",
+          ...initialData.appState,
+        }, initialData.files ?? {}), 0);
+        return () => window.clearTimeout(timer);
+      }, [elements, initialData.appState, onChange]);
       return React.createElement(
         "div",
         { "aria-label": "Drawing canvas" },
@@ -28,7 +39,7 @@ vi.mock("@excalidraw/excalidraw", async () => {
           onClick: () => {
             const next = [...elements, { id: "new-element" }];
             setElements(next);
-            onChange(next, {}, {});
+            onChange(next, { gridSize: 20, gridStep: 5, gridModeEnabled: false, viewBackgroundColor: "#ffffff" }, initialData.files ?? {});
           },
         }, "Add element"),
       );
@@ -79,6 +90,7 @@ describe("drawing file workflow", () => {
     state.recent = [];
     state.recovery = null;
     state.modifiedAt = null;
+    state.writeGate = null;
     state.closeRequested = null;
     state.open.mockResolvedValue(null);
     state.save.mockResolvedValue(null);
@@ -94,6 +106,7 @@ describe("drawing file workflow", () => {
           return contents;
         }
         case "write_drawing":
+          if (state.writeGate) await state.writeGate;
           state.drawings.set(args?.path ?? "", args?.contents ?? "");
           return undefined;
         case "remember_file":
@@ -122,9 +135,35 @@ describe("drawing file workflow", () => {
     expect(JSON.parse(state.drawings.get("/drawings/blank.excalidraw") ?? "")).toMatchObject({
       type: "excalidraw",
       elements: [],
-      appState: {},
+      appState: { gridSize: 20, gridStep: 5, gridModeEnabled: false, viewBackgroundColor: "#ffffff" },
       files: {},
     });
+  });
+
+  it("keeps the initial blank canvas clean after Excalidraw initializes", async () => {
+    await openEditor();
+    await new Promise((resolve) => window.setTimeout(resolve, 750));
+
+    expect(screen.queryByText("Unsaved")).toBeNull();
+    expect(screen.getByText("Ready")).toBeTruthy();
+    expect(state.invoke).not.toHaveBeenCalledWith("write_recovery", expect.anything());
+  });
+
+  it("keeps edits made during a save marked unsaved", async () => {
+    let finishWrite!: () => void;
+    state.writeGate = new Promise<void>((resolve) => { finishWrite = resolve; });
+    state.save.mockResolvedValue("/drawings/racing-save.excalidraw");
+    await openEditor();
+
+    fireEvent.click(screen.getAllByRole("button", { name: /save/i })[0]);
+    await waitFor(() => expect(state.invoke).toHaveBeenCalledWith(
+      "write_drawing",
+      expect.objectContaining({ path: "/drawings/racing-save.excalidraw" }),
+    ));
+    fireEvent.click(screen.getByRole("button", { name: "Add element" }));
+    finishWrite();
+
+    await waitFor(() => expect(screen.getByText("Unsaved")).toBeTruthy());
   });
 
   it("keeps the current drawing open when a malformed file is selected", async () => {
@@ -143,7 +182,7 @@ describe("drawing file workflow", () => {
     const path = "/drawings/existing.excalidraw";
     const original = {
       ...JSON.parse(drawing([{ id: "existing-element" }])),
-      appState: { viewBackgroundColor: "#fefefe" },
+      appState: { gridSize: 20, gridStep: 5, gridModeEnabled: false, viewBackgroundColor: "#fefefe" },
       files: { "image-id": { id: "image-id", dataURL: "data:image/png;base64,AA==", mimeType: "image/png", created: 1 } },
     };
     state.drawings.set(path, JSON.stringify(original));
@@ -195,5 +234,6 @@ describe("drawing file workflow", () => {
     await waitFor(() => expect(screen.getByTestId("elements").textContent).toContain("recovered-element"));
     expect(screen.getByText("Unsaved").textContent).toBe("Unsaved");
     expect(state.drawings.get("/drawings/original.excalidraw")).toContain("saved-element");
+    await waitFor(() => expect(state.recovery?.drawing).toContain("recovered-element"), { timeout: 1500 });
   });
 });
