@@ -18,7 +18,7 @@
     "tauri:build:linux": "tauri build --bundles appimage,deb,rpm"
   },
   "dependencies": {
-    "@excalidraw/excalidraw": "0.18.0",
+    "@excalidraw/excalidraw": "0.18.1",
     "@tauri-apps/api": "~2.11.0",
     "@tauri-apps/plugin-dialog": "~2.7.0",
     "lucide-react": "^0.468.0",
